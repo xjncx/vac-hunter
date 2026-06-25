@@ -14,6 +14,7 @@ VALID_CONFIG = {
     "desired_skills": "AI, HR, analytics",
     "excluded_terms": "sales",
     "resume_text": "Candidate profile",
+    "market_scan_limit": "30",
     "match_threshold": "75",
 }
 
@@ -31,6 +32,11 @@ class ServiceConfigValidationTest(unittest.TestCase):
         config = dict(VALID_CONFIG, auto_sync_enabled="on", sync_interval_minutes="3")
 
         self.assertIn("Интервал проверки должен быть не меньше 5 минут", validate_service_config(config))
+
+    def test_requires_valid_market_scan_limit(self):
+        config = dict(VALID_CONFIG, market_scan_limit="0")
+
+        self.assertIn("Количество вакансий для оценки ИИ должно быть от 1 до 100", validate_service_config(config))
 
 
 if __name__ == "__main__":

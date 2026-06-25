@@ -109,6 +109,79 @@ class App:
             "notification_sent": notification_sent,
         }
 
+    def scan_market(self, *, limit: int | None = None) -> dict[str, Any]:
+        config = self.db.get_json("service_config", {}) or {}
+        limit = max(1, min(int(limit or config.get("market_scan_limit") or 30), 100))
+        query = market_query(config)
+        if not query:
+            raise ValueError("Укажите желаемые роли или ключевые навыки для сканирования рынка")
+
+        result = self.client().search({
+            "text": query,
+            "area": "113",
+            "per_page": limit,
+            "order_by": "publication_time",
+        })
+        vacancies: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        seen_urls: set[str] = set()
+
+        for item in result.get("items", [])[:limit]:
+            url = str(item.get("alternate_url") or item.get("url") or "").strip()
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            existing = self.db.get_vacancy(url)
+            try:
+                if existing and existing.get("description") and self.db.vacancy_has_ai_match(url):
+                    vacancy = dict(existing)
+                    vacancy["ai_reused"] = True
+                else:
+                    vacancy = fetch_and_parse_vacancy(url, user_agent=self.settings.user_agent).as_dict()
+                    self.db.save_vacancy(vacancy, source="market scan")
+                    if str(config.get("ai_enabled", "")).lower() in {"1", "true", "yes", "on"}:
+                        match = evaluate_vacancy(
+                            api_key=self.settings.deepseek_api_key,
+                            model=self.settings.deepseek_model,
+                            vacancy=vacancy,
+                            resume_text=str(config.get("resume_text") or ""),
+                            desired_roles=str(config.get("desired_roles") or ""),
+                            desired_skills=str(config.get("desired_skills") or ""),
+                            excluded_terms=str(config.get("excluded_terms") or ""),
+                        ).as_dict()
+                        vacancy["match"] = match
+                        self.db.save_match(vacancy["url"], match)
+                vacancies.append(vacancy)
+            except (VacancyPageError, AIMatchError) as error:
+                errors.append({"url": url, "error": str(error)})
+
+        threshold = int(config.get("match_threshold") or 0)
+        digest_vacancies = [
+            vacancy for vacancy in vacancies
+            if vacancy_match_score(vacancy, default=100) >= threshold
+        ]
+        digest_vacancies.sort(key=vacancy_match_score, reverse=True)
+        notification_sent = False
+        if str(config.get("notification_email") or "").strip() and digest_vacancies:
+            send_vacancy_digest(config, digest_vacancies)
+            notification_sent = True
+
+        self.db.set_json("last_sync", {
+            "ts": int(time.time()),
+            "mode": "market_scan",
+            "emails": 0,
+            "vacancies": len(vacancies),
+            "errors": errors,
+            "notification_sent": notification_sent,
+        })
+        return {
+            "query": query,
+            "found": result.get("found", len(vacancies)),
+            "vacancies": vacancies,
+            "errors": errors,
+            "notification_sent": notification_sent,
+        }
+
 
 def vacancy_match_score(vacancy: dict[str, Any], *, default: int = 0) -> int:
     raw_score = (vacancy.get("match") or {}).get("score", vacancy.get("score", default))
@@ -116,6 +189,14 @@ def vacancy_match_score(vacancy: dict[str, Any], *, default: int = 0) -> int:
         return int(raw_score if raw_score is not None else default)
     except (TypeError, ValueError):
         return default
+
+
+def market_query(config: dict[str, Any]) -> str:
+    parts = [
+        str(config.get("desired_roles") or "").strip(),
+        str(config.get("desired_skills") or "").strip(),
+    ]
+    return " ".join(part for part in parts if part)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -185,7 +266,7 @@ class Handler(BaseHTTPRequestHandler):
                 for key in [
                     "imap_host", "imap_port", "mail_username", "mail_folder", "mail_sender_filter",
                     "notification_email", "resume_text", "desired_roles", "desired_skills",
-                    "excluded_terms", "match_threshold", "ai_enabled",
+                    "excluded_terms", "market_scan_limit", "match_threshold", "ai_enabled",
                     "auto_sync_enabled", "sync_interval_minutes",
                 ]:
                     if key in payload:
@@ -282,6 +363,9 @@ class Handler(BaseHTTPRequestHandler):
                 limit = min(int(payload.get("limit") or 50), 100)
                 fetch_descriptions = bool(payload.get("fetch_descriptions"))
                 return self.json(self.app.sync_mail(limit=limit, fetch_descriptions=fetch_descriptions))
+            if parsed.path == "/api/market/scan":
+                limit = min(int(payload.get("limit") or 0), 100) or None
+                return self.json(self.app.scan_market(limit=limit))
             return self.json({"error": "Not found"}, 404)
         except HHError as error:
             return self.json({"error": str(error), "details": error.payload}, error.status)
@@ -399,6 +483,13 @@ def validate_service_config(config: dict[str, Any]) -> list[str]:
             errors.append("Порог совпадения должен быть от 0 до 100")
     except (TypeError, ValueError):
         errors.append("Порог совпадения должен быть от 0 до 100")
+
+    try:
+        scan_limit = int(config.get("market_scan_limit") or 30)
+        if scan_limit < 1 or scan_limit > 100:
+            errors.append("Количество вакансий для оценки ИИ должно быть от 1 до 100")
+    except (TypeError, ValueError):
+        errors.append("Количество вакансий для оценки ИИ должно быть от 1 до 100")
 
     if enabled("auto_sync_enabled"):
         try:

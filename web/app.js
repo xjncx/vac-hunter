@@ -52,6 +52,12 @@ function validateServiceConfig(form, payload) {
     form.elements.match_threshold?.classList.add('is-invalid');
   }
 
+  const scanLimit = Number(payload.market_scan_limit || 30);
+  if (!Number.isInteger(scanLimit) || scanLimit < 1 || scanLimit > 100) {
+    errors.push('Количество вакансий для оценки ИИ должно быть от 1 до 100');
+    form.elements.market_scan_limit?.classList.add('is-invalid');
+  }
+
   const interval = Number(payload.sync_interval_minutes || 15);
   if (payload.auto_sync_enabled && (!Number.isFinite(interval) || interval < 5)) {
     errors.push('Интервал проверки должен быть не меньше 5 минут');
@@ -136,6 +142,23 @@ $('#mail-sync').addEventListener('click', async () => {
     const vacancyCount = data.vacancies?.length || 0;
     const errors = data.errors?.length ? `, ошибок: ${data.errors.length}` : '';
     $('#notice').textContent = `Писем обработано: ${emailCount}, вакансий найдено: ${vacancyCount}${errors}${data.notification_sent ? ', подборка отправлена' : ', подходящих вакансий для отправки нет'}`;
+    await loadLastSync();
+  } catch (error) {
+    $('#notice').textContent = error.message;
+  }
+});
+
+$('#market-scan').addEventListener('click', async () => {
+  $('#notice').textContent = 'Сканирую рынок, оцениваю вакансии ИИ и готовлю письмо…';
+  try {
+    const limit = Number($('#service-config-form').elements.market_scan_limit.value || 30);
+    const data = await api('/api/market/scan', {
+      method: 'POST',
+      body: JSON.stringify({limit}),
+    });
+    const vacancyCount = data.vacancies?.length || 0;
+    const errors = data.errors?.length ? `, ошибок: ${data.errors.length}` : '';
+    $('#notice').textContent = `Запрос: ${data.query}. Вакансий оценено: ${vacancyCount}${errors}${data.notification_sent ? ', подборка отправлена' : ', подходящих вакансий для отправки нет'}`;
     await loadLastSync();
   } catch (error) {
     $('#notice').textContent = error.message;

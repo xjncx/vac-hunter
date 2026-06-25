@@ -57,6 +57,9 @@
         <label class="wide required-field"><span class="field-label">Стоп-слова</span>
           <input name="excluded_terms" placeholder="1С, продажи, офис 5/2">
         </label>
+        <label><span class="field-label">Количество вакансий для оценки ИИ</span>
+          <input name="market_scan_limit" type="number" min="1" max="100" value="30">
+        </label>
         <label><span class="field-label">Порог совпадения, %</span>
           <input name="match_threshold" type="number" min="0" max="100" value="75">
         </label>
@@ -68,6 +71,7 @@
       <div id="gmail-status" class="connection-status is-missing">Gmail не подключен</div>
       <div class="inline-actions">
         <button id="mail-sync" type="button">Проверить почту и отправить подборку</button>
+        <button id="market-scan" type="button">Просканировать рынок и отправить подборку</button>
       </div>
       <p id="last-sync" class="hint">Последняя синхронизация: ещё не запускалась</p>
     </section>
