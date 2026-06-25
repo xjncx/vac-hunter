@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>JobSearcher · HeadHunter</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div><span class="eyebrow">Локальный помощник</span><h1>Вакансии отобранные ИИ</h1>
+      <p>Находит, ранжирует и готовит отклики. Последнее слово всегда остаётся за вами.</p></div>
+      <div id="status" class="status">Проверяем подключение…</div>
+    </header>
+
+    <section class="panel">
+      <form id="service-config-form" novalidate>
+        <label class="required-field"><span class="field-label">IMAP host</span>
+          <input name="imap_host" value="imap.gmail.com">
+        </label>
+        <label class="required-field"><span class="field-label">IMAP port</span>
+          <input name="imap_port" type="number" value="993">
+        </label>
+        <label class="required-field"><span class="field-label">Почта, которую читать</span>
+          <input name="mail_username" placeholder="your@gmail.com">
+        </label>
+        <label class="required-field"><span class="field-label">App password почты</span>
+          <input name="mail_password" type="password" placeholder="16-значный пароль приложения">
+        </label>
+        <label><span class="field-label">Папка/метка</span>
+          <input name="mail_folder" value="INBOX" placeholder="INBOX или hh-jobs">
+        </label>
+        <label class="required-field"><span class="field-label">Фильтр отправителя</span>
+          <input name="mail_sender_filter" value="hh.ru">
+        </label>
+        <label class="wide required-field"><span class="field-label">Email для уведомлений</span>
+          <input name="notification_email" placeholder="куда отправлять подходящие вакансии">
+        </label>
+        <label class="check">
+          <input name="ai_enabled" type="checkbox" checked>
+          оценивать вакансии через DeepSeek AI
+        </label>
+        <label class="check">
+          <input name="auto_sync_enabled" type="checkbox">
+          автоматически проверять почту
+        </label>
+        <label class="conditional-field"><span class="field-label">Интервал проверки, минут</span>
+          <input name="sync_interval_minutes" type="number" min="5" value="15">
+        </label>
+        <label class="wide required-field"><span class="field-label">Желаемые роли</span>
+          <input name="desired_roles" placeholder="Golang backend, Go developer, platform engineer">
+        </label>
+        <label class="wide required-field"><span class="field-label">Ключевые навыки</span>
+          <input name="desired_skills" placeholder="Go, PostgreSQL, Docker, Linux, Kubernetes">
+        </label>
+        <label class="wide required-field"><span class="field-label">Стоп-слова</span>
+          <input name="excluded_terms" placeholder="1С, продажи, офис 5/2">
+        </label>
+        <label><span class="field-label">Порог совпадения, %</span>
+          <input name="match_threshold" type="number" min="0" max="100" value="75">
+        </label>
+        <label class="wide required-field"><span class="field-label">Резюме / профиль кандидата</span>
+          <textarea name="resume_text" rows="8" placeholder="Вставь сюда резюме или краткое описание опыта. Потом ИИ будет сравнивать вакансии с этим текстом."></textarea>
+        </label>
+        <button type="submit">Сохранить настройки сервиса</button>
+      </form>
+      <div id="gmail-status" class="connection-status is-missing">Gmail не подключен</div>
+      <div class="inline-actions">
+        <button id="mail-sync" type="button">Проверить почту и отправить подборку</button>
+      </div>
+      <p id="last-sync" class="hint">Последняя синхронизация: ещё не запускалась</p>
+    </section>
+
+    <div id="notice"></div>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

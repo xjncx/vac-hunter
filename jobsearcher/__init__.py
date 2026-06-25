@@ -1,0 +1,2 @@
+"""HeadHunter job search assistant."""
+
