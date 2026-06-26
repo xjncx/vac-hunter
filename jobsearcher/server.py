@@ -10,6 +10,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -33,6 +34,8 @@ class App:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.db = Database(settings.database)
+        self.jobs: dict[str, dict[str, Any]] = {}
+        self.jobs_lock = threading.Lock()
 
     def client(self) -> HHClient:
         tokens = self.db.get_json("tokens", {}) or {}
@@ -181,6 +184,43 @@ class App:
             "notification_sent": notification_sent,
         }
 
+    def start_job(self, kind: str, target, *args: Any, **kwargs: Any) -> str:
+        job_id = uuid.uuid4().hex
+        with self.jobs_lock:
+            self.jobs[job_id] = {
+                "id": job_id,
+                "kind": kind,
+                "status": "running",
+                "message": "Задача запущена",
+                "started_at": int(time.time()),
+            }
+
+        def worker() -> None:
+            try:
+                result = target(*args, **kwargs)
+                with self.jobs_lock:
+                    self.jobs[job_id].update({
+                        "status": "done",
+                        "message": "Готово",
+                        "finished_at": int(time.time()),
+                        "result": result,
+                    })
+            except Exception as error:
+                with self.jobs_lock:
+                    self.jobs[job_id].update({
+                        "status": "error",
+                        "message": str(error),
+                        "finished_at": int(time.time()),
+                    })
+
+        threading.Thread(target=worker, name=f"job-{kind}-{job_id[:8]}", daemon=True).start()
+        return job_id
+
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
+        with self.jobs_lock:
+            job = self.jobs.get(job_id)
+            return dict(job) if job else None
+
     def market_search(self, *, query: str, limit: int) -> tuple[dict[str, Any], str]:
         params = {
             "text": query,
@@ -304,6 +344,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json({"items": self.app.db.list_vacancies()})
             if parsed.path == "/api/last-sync":
                 return self.json(self.app.db.get_json("last_sync", {}) or {})
+            if parsed.path == "/api/job":
+                job_id = urllib.parse.parse_qs(parsed.query).get("id", [""])[0]
+                job = self.app.get_job(job_id)
+                if not job:
+                    return self.json({"error": "Задача не найдена"}, 404)
+                return self.json(job)
             if parsed.path == "/api/resumes":
                 return self.json({"items": self.app.client().resumes()})
             if parsed.path == "/oauth/start":
@@ -447,6 +493,10 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/market/scan":
                 limit = min(int(payload.get("limit") or 0), 100) or None
                 return self.json(self.app.scan_market(limit=limit))
+            if parsed.path == "/api/market/scan-job":
+                limit = min(int(payload.get("limit") or 0), 100) or None
+                job_id = self.app.start_job("market_scan", self.app.scan_market, limit=limit)
+                return self.json({"job_id": job_id})
             return self.json({"error": "Not found"}, 404)
         except HHError as error:
             return self.json({"error": str(error), "details": error.payload}, error.status)

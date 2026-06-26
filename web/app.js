@@ -69,9 +69,48 @@ function validateServiceConfig(form, payload) {
 
 async function api(url, options={}) {
   const response = await fetch(url, {headers:{'Content-Type':'application/json'}, ...options});
-  const data = await response.json();
+  const contentType = response.headers.get('Content-Type') || '';
+  const raw = await response.text();
+  let data = {};
+  if (contentType.includes('application/json')) {
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch (error) {
+      throw new Error(`Сервер вернул поврежденный JSON: ${error.message}`);
+    }
+  } else {
+    const plain = raw.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    throw new Error(plain ? `Сервер вернул не JSON: ${plain.slice(0, 240)}` : `Сервер вернул HTTP ${response.status} без JSON`);
+  }
   if (!response.ok) throw new Error(data.details ? `${data.error}: ${JSON.stringify(data.details)}` : data.error);
   return data;
+}
+
+function setBusy(isBusy, text='Работаю…') {
+  const progress = $('#progress');
+  const progressText = $('#progress-text');
+  if (progress) progress.hidden = !isBusy;
+  if (progressText) progressText.textContent = text;
+  document.querySelectorAll('button').forEach(button => {
+    button.disabled = isBusy;
+  });
+}
+
+async function waitForJob(jobId, progressText='Работаю…') {
+  setBusy(true, progressText);
+  while (true) {
+    const job = await api(`/api/job?id=${encodeURIComponent(jobId)}`);
+    if (job.status === 'done') {
+      setBusy(false);
+      return job.result || {};
+    }
+    if (job.status === 'error') {
+      setBusy(false);
+      throw new Error(job.message || 'Задача завершилась с ошибкой');
+    }
+    setBusy(true, job.message || progressText);
+    await new Promise(resolve => setTimeout(resolve, 1500));
+  }
 }
 
 async function loadStatus() {
@@ -130,6 +169,7 @@ $('#service-config-form').addEventListener('submit', async event => {
 
 $('#mail-sync').addEventListener('click', async () => {
   $('#notice').textContent = 'Читаю почту, ранжирую вакансии и готовлю письмо…';
+  setBusy(true, 'Читаю почту и оцениваю вакансии…');
   try {
     const data = await api('/api/mail/sync', {
       method: 'POST',
@@ -145,23 +185,28 @@ $('#mail-sync').addEventListener('click', async () => {
     await loadLastSync();
   } catch (error) {
     $('#notice').textContent = error.message;
+  } finally {
+    setBusy(false);
   }
 });
 
 $('#market-scan').addEventListener('click', async () => {
   $('#notice').textContent = 'Сканирую рынок, оцениваю вакансии ИИ и готовлю письмо…';
+  setBusy(true, 'Запускаю сканирование рынка…');
   try {
     const limit = Number($('#service-config-form').elements.market_scan_limit.value || 30);
-    const data = await api('/api/market/scan', {
+    const started = await api('/api/market/scan-job', {
       method: 'POST',
       body: JSON.stringify({limit}),
     });
+    const data = await waitForJob(started.job_id, 'Сканирую рынок и оцениваю вакансии…');
     const vacancyCount = data.vacancies?.length || 0;
     const errors = data.errors?.length ? `, ошибок: ${data.errors.length}` : '';
     $('#notice').textContent = `Запрос: ${data.query}. Вакансий оценено: ${vacancyCount}${errors}${data.notification_sent ? ', подборка отправлена' : ', подходящих вакансий для отправки нет'}`;
     await loadLastSync();
   } catch (error) {
     $('#notice').textContent = error.message;
+    setBusy(false);
   }
 });
 loadStatus().catch(error => $('#status').textContent = error.message);
