@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from jobsearcher.server import fetch_hh_search_urls, market_query, vacancy_match_score
+from jobsearcher.server import fetch_hh_search_urls, market_query, search_query_variants, vacancy_match_score
 
 
 class MarketScanTest(unittest.TestCase):
@@ -31,7 +31,7 @@ class MarketScanTest(unittest.TestCase):
                 return b"""
                     <a href="https://hh.ru/vacancy/1">One</a>
                     <a href="https://hh.ru/vacancy/1?from=search">Duplicate</a>
-                    <a href="https://hh.ru/vacancy/2">Two</a>
+                    <a href="/vacancy/2">Two</a>
                 """
 
         with patch("jobsearcher.server.urllib.request.urlopen", return_value=Response()):
@@ -39,6 +39,14 @@ class MarketScanTest(unittest.TestCase):
                 "https://hh.ru/vacancy/1",
                 "https://hh.ru/vacancy/2",
             ])
+
+    def test_search_query_variants_split_mixed_query(self):
+        self.assertEqual(search_query_variants("ИИ HR, automation; elearning"), [
+            "ИИ HR, automation; elearning",
+            "ИИ HR",
+            "automation",
+            "elearning",
+        ])
 
 
 if __name__ == "__main__":

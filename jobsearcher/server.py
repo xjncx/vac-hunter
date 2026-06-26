@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import html
 import json
 import mimetypes
 import re
@@ -216,6 +217,32 @@ def market_query(config: dict[str, Any]) -> str:
 
 
 def fetch_hh_search_urls(*, query: str, limit: int, user_agent: str = "") -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+    attempted: list[str] = []
+    for search_query in search_query_variants(query):
+        attempted.append(search_query)
+        for url in fetch_hh_search_urls_once(query=search_query, limit=limit, user_agent=user_agent):
+            if url not in seen:
+                urls.append(url)
+                seen.add(url)
+            if len(urls) >= limit:
+                return urls
+    raise HHError(403, "HeadHunter API запрещен, а HTML-поиск не вернул ссылок на вакансии. Пробовал запросы: " + "; ".join(attempted[:8]))
+
+
+def search_query_variants(query: str) -> list[str]:
+    variants: list[str] = []
+    raw_parts = [query]
+    raw_parts.extend(re.split(r"[,;\n]", query))
+    for part in raw_parts:
+        clean = re.sub(r"\s+", " ", part).strip()
+        if clean and clean.casefold() not in {item.casefold() for item in variants}:
+            variants.append(clean)
+    return variants
+
+
+def fetch_hh_search_urls_once(*, query: str, limit: int, user_agent: str = "") -> list[str]:
     params = urllib.parse.urlencode({
         "text": query,
         "area": "113",
@@ -237,17 +264,19 @@ def fetch_hh_search_urls(*, query: str, limit: int, user_agent: str = "") -> lis
     except OSError as error:
         raise HHError(403, f"HeadHunter API запрещен, fallback HTML-поиска тоже не открылся: {error}") from error
 
+    page = html.unescape(page).replace("\\/", "/")
     urls: list[str] = []
     seen: set[str] = set()
-    for match in re.finditer(r"https://hh\.ru/vacancy/\d+", page):
-        url = match.group(0)
+    candidates: list[str] = []
+    candidates.extend(re.findall(r"https://hh\.ru/vacancy/\d+", page))
+    candidates.extend(f"https://hh.ru{path}" for path in re.findall(r"(?<!https://hh\.ru)/vacancy/\d+", page))
+    candidates.extend(f"https://hh.ru/vacancy/{vacancy_id}" for vacancy_id in re.findall(r'vacancyId["\']?\s*[:=]\s*["\']?(\d+)', page))
+    for url in candidates:
         if url not in seen:
             urls.append(url)
             seen.add(url)
         if len(urls) >= limit:
             break
-    if not urls:
-        raise HHError(403, "HeadHunter API запрещен, а HTML-поиск не вернул ссылок на вакансии")
     return urls
 
 
