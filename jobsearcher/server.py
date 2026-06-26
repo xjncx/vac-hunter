@@ -3,10 +3,12 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import re
 import secrets
 import threading
 import time
 import urllib.parse
+import urllib.request
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -116,12 +118,7 @@ class App:
         if not query:
             raise ValueError("Укажите желаемые роли или ключевые навыки для сканирования рынка")
 
-        result = self.client().search({
-            "text": query,
-            "area": "113",
-            "per_page": limit,
-            "order_by": "publication_time",
-        })
+        result, source = self.market_search(query=query, limit=limit)
         vacancies: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
         seen_urls: set[str] = set()
@@ -176,11 +173,30 @@ class App:
         })
         return {
             "query": query,
+            "source": source,
             "found": result.get("found", len(vacancies)),
             "vacancies": vacancies,
             "errors": errors,
             "notification_sent": notification_sent,
         }
+
+    def market_search(self, *, query: str, limit: int) -> tuple[dict[str, Any], str]:
+        params = {
+            "text": query,
+            "area": "113",
+            "per_page": limit,
+            "order_by": "publication_time",
+        }
+        try:
+            return self.client().search(params), "api"
+        except HHError as error:
+            if error.status != 403:
+                raise
+            urls = fetch_hh_search_urls(query=query, limit=limit, user_agent=self.settings.user_agent)
+            return {
+                "found": len(urls),
+                "items": [{"alternate_url": url, "url": url} for url in urls],
+            }, "html"
 
 
 def vacancy_match_score(vacancy: dict[str, Any], *, default: int = 0) -> int:
@@ -197,6 +213,42 @@ def market_query(config: dict[str, Any]) -> str:
         str(config.get("desired_skills") or "").strip(),
     ]
     return " ".join(part for part in parts if part)
+
+
+def fetch_hh_search_urls(*, query: str, limit: int, user_agent: str = "") -> list[str]:
+    params = urllib.parse.urlencode({
+        "text": query,
+        "area": "113",
+        "items_on_page": min(max(limit, 20), 100),
+        "order_by": "publication_time",
+    })
+    request = urllib.request.Request(
+        f"https://hh.ru/search/vacancy?{params}",
+        headers={
+            "User-Agent": user_agent or "Mozilla/5.0",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.6",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=25) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            page = response.read().decode(charset, errors="replace")
+    except OSError as error:
+        raise HHError(403, f"HeadHunter API запрещен, fallback HTML-поиска тоже не открылся: {error}") from error
+
+    urls: list[str] = []
+    seen: set[str] = set()
+    for match in re.finditer(r"https://hh\.ru/vacancy/\d+", page):
+        url = match.group(0)
+        if url not in seen:
+            urls.append(url)
+            seen.add(url)
+        if len(urls) >= limit:
+            break
+    if not urls:
+        raise HHError(403, "HeadHunter API запрещен, а HTML-поиск не вернул ссылок на вакансии")
+    return urls
 
 
 class Handler(BaseHTTPRequestHandler):
